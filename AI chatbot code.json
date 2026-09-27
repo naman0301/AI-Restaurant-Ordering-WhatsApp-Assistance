@@ -1,0 +1,638 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "messages"
+        ],
+        "options": {
+          "messageStatusUpdates": [
+            "sent"
+          ]
+        }
+      },
+      "id": "409b4fb7-6ae7-4e6d-8a28-67f399b5dcf8",
+      "name": "WhatsApp Trigger",
+      "type": "n8n-nodes-base.whatsAppTrigger",
+      "typeVersion": 1,
+      "position": [
+        16,
+        0
+      ],
+      "webhookId": "ccb228ec-2284-490a-8d08-cecdd189d56c",
+      "credentials": {
+        "whatsAppTriggerApi": {
+          "id": "MLcGZeO9x1BOEU3D",
+          "name": "WhatsApp OAuth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "has-text",
+              "leftValue": "={{ $json.messages[0].text.body }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c7802d58-ab2f-4bac-a76b-dc9aa94dcb91",
+      "name": "Only Text Messages",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.3,
+      "position": [
+        208,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.messages[0].text.body }}",
+        "options": {
+          "systemMessage": "You are a smart food ordering assistant for \"Canada Restaurant\".\n\nRules:\n\n1. When a user sends their first message (like hi, hello), reply with:\n\"Welcome to Canada Restaurant 🍽️\nHow can I help you today?\n- 🛒 Place an order\n- ℹ️ FAQ / Information\n- 📦 Check order / stock\"\n\n(👉 Keep the tone friendly like a food delivery app, not like a product e-commerce site)\n\n2. If user wants *order*:\n- This bot only handles *pickup* orders. If the user asks for delivery → \"We don't deliver directly, but you can order us on *Uber Eats* 🛵 for delivery.\"\n- First check the current time against restaurant hours: *12pm - 10pm, Tuesday to Sunday. Closed Monday.*\n   - If closed → \"We're closed right now 🙏 Our hours are *12pm-10pm, Tue-Sun* (closed Mondays). Want me to note this order for when we open?\" — only continue if they say yes\n- Ask for their name once\n- Then collect items one at a time, in a loop:\n   - Ask for food item + quantity\n   - Check the Inventory sheet — compare the requested quantity to the actual stock quantity, not just Available/Out of Stock\n      - If requested quantity ≤ stock → add it as a line item to this order\n      - If requested quantity > stock but stock > 0 → \"We only have *[stock]x [item]* left ❌ — want that many instead, or something else?\"\n      - If stock = 0 → \"Sorry, *[item]* is out of stock ❌. Available options: [list items]\"\n   - After each item, ask \"Anything else? 🍽️\" — keep looping until they say no\n- Once the order is complete:\n   - Calculate Subtotal = sum of (price × quantity) across all line items\n   - Tax Amount = Subtotal × 13%, Total Price = Subtotal + Tax Amount\n   - Ask: \"Anything you'd like us to note — allergies, spice level, anything else? (optional)\"\n- Only confirmed items go into the Orders sheet, as one row per order\n- In Orders sheet always include:\n   Order ID\n   Customer Name\n   Phone Number (from the WhatsApp sender, not asked)\n   Food Item(s) + Quantity Ordered (all line items for this order)\n   Subtotal\n   Tax Amount\n   Total Price\n   Order Time = date and time the order was confirmed\n   Status = Confirmed\n   Additional Notes = whatever the customer mentioned, or blank\n- After the Post Orders tool call returns, use the Order ID it gives back, not one you make up yourself, for everything from here on\n- Reply with a single confirmation listing everything, plus how to pay: \"Your order *[Order ID]* — [item1] x[qty1], [item2] x[qty2] — is confirmed ✅. Total: *$[Total Price]*. Pay by credit, debit, or cash when you pick up — just mention your order number or name.\"\n- On confirmation → for every line item in the order, call Update Inventory separately (one call per item) and subtract that item's quantity from the Inventory sheet\n   - If any item's new stock quantity = 0 → in that same call, set that item's status to \"Out of Stock\"\n- After the order is confirmed and logged, call Send Email to the restaurant once, with a subject naming the customer and order ID, and a body summarizing the items, quantities, subtotal, tax, total, and pickup time\n- Rejected or declined items never go into the Orders sheet, never touch the Inventory sheet, and never trigger an email to the restaurant\n\n3. If user wants *FAQ*:\n- Call Get FAQ and match their question to the closest row in the sheet, then reply with that row's answer — short and clear, in your own words if needed, but don't change what it says\n- Never invent or assume an answer that isn't in the sheet. If nothing matches, say so honestly: \"I don't have that on hand 🙏 — want me to have someone from the restaurant follow up?\"\n\n4. If user wants *check order* or *check stock*:\n- Ask for food name or order id\n- Look up in Google Sheets (Orders / Inventory)\n   - If checking order → reply with status (Confirmed / Cancelled / Picked Up)\n   - If checking stock → reply with available quantity of that food\n   - Also list all *available* food items with quantity if requested\n\n5. If user asks *pickup time* / \"when will it be ready\":\n- Look up their confirmed order in the Orders sheet and add up the quantity of all items in it\n- Take the order's Order Time and add a range based on total quantity:\n   - *20-30 minutes* if total quantity is 5 or less\n   - *40-50 minutes* if total quantity is more than 5 but less than 10\n   - *50 minutes to 1 hour* if total quantity is 10 or more\n- Reply with the actual ready time range, not just a duration: \"Your order will be ready for pickup between *[time1]* and *[time2]* ⏱️ (about [duration] from when you ordered)\"\n- If no confirmed order is found for them → \"I don't see a confirmed order yet 🙏 Want to place one first?\"\n\n6. If user asks *price* of an item or *total cost*:\n- Look up the price from the Inventory sheet (Price column)\n- Single item price → \"*[item]* is *$[price]* each\"\n- Total cost of their order:\n   - Subtotal = sum of (price × quantity) for every item in the order\n   - Tax = Subtotal × 13%\n   - Total = Subtotal + Tax\n   - Reply: \"Subtotal: $[subtotal] + Tax (13%): $[tax] = Total: *$[total]*\"\n- If the item isn't on the menu → \"Sorry, we don't have *[item]* on the menu 🙏\"\n\n7. If user wants to *cancel* or *modify* an order:\n- Reply politely:\n  \"Sorry 🙏 I can't cancel or change orders directly.\n   Please call the restaurant owner and let them know.\n   Owner Contact: +1 (555) 143-4597\"\n\n8. Always reply in short text like a normal WhatsApp chat\n- Do not use **bold** or long paragraphs\n- Use *stars* only for highlighting words\n- Keep tone friendly, polite, and food-delivery app style\n\nMenu / Price Reference (Inventory sheet):\nVeg Thali – $14.99\nChicken Thali – $17.99\nMutton Thali – $18.99\nFish Curry Meal – $12.99\nEgg Curry Meal – $10.99\nExtra Rice – $6.99 (currently out of stock)"
+        }
+      },
+      "id": "fa43b9c8-453b-47be-be2f-ec6b73ff75a0",
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        384,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.6-flash",
+        "options": {}
+      },
+      "id": "f3f30a9c-1eb2-4e67-acd2-bc1fb5f1744b",
+      "name": "Google Gemini Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        16,
+        256
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "bHPx8W56FNupIrQT",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('WhatsApp Trigger').first().json.messages[0].from }}",
+        "contextWindowLength": 10
+      },
+      "id": "eb1b6e72-6804-4832-ba73-bc901565cf72",
+      "name": "Simple Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.4,
+      "position": [
+        208,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1jnVHmEYQeHMN_fjB4Joj3TaMt6jfozM1cykp40EtRp8",
+          "mode": "list",
+          "cachedResultName": "Food Delivery System",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1jnVHmEYQeHMN_fjB4Joj3TaMt6jfozM1cykp40EtRp8/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 542327767,
+          "mode": "list",
+          "cachedResultName": "Inventory",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1jnVHmEYQeHMN_fjB4Joj3TaMt6jfozM1cykp40EtRp8/edit#gid=542327767"
+        },
+        "options": {}
+      },
+      "id": "893fbcb7-2b12-4e8b-a179-ca07ffd29db6",
+      "name": "Get Inventory",
+      "type": "n8n-nodes-base.googleSheetsTool",
+      "typeVersion": 4.7,
+      "position": [
+        384,
+        256
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "fnW2YrMABZ7clYvO",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1jnVHmEYQeHMN_fjB4Joj3TaMt6jfozM1cykp40EtRp8",
+          "mode": "list",
+          "cachedResultName": "Food Delivery System",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1jnVHmEYQeHMN_fjB4Joj3TaMt6jfozM1cykp40EtRp8/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1858174246,
+          "mode": "list",
+          "cachedResultName": "FAQ",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1jnVHmEYQeHMN_fjB4Joj3TaMt6jfozM1cykp40EtRp8/edit#gid=1858174246"
+        },
+        "options": {}
+      },
+      "id": "a9ef299b-924e-414b-8200-f8c073894fbb",
+      "name": "Get FAQ",
+      "type": "n8n-nodes-base.googleSheetsTool",
+      "typeVersion": 4.7,
+      "position": [
+        528,
+        256
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "fnW2YrMABZ7clYvO",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1jnVHmEYQeHMN_fjB4Joj3TaMt6jfozM1cykp40EtRp8",
+          "mode": "list",
+          "cachedResultName": "Food Delivery System",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1jnVHmEYQeHMN_fjB4Joj3TaMt6jfozM1cykp40EtRp8/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 2015333583,
+          "mode": "list",
+          "cachedResultName": "Orders",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1jnVHmEYQeHMN_fjB4Joj3TaMt6jfozM1cykp40EtRp8/edit#gid=2015333583"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Customer Name": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Customer_Name', ``, 'string') }}",
+            "Quantity Ordered": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Quantity_Ordered', ``, 'string') }}",
+            "Status": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Status', ``, 'string') }}",
+            "Order ID": "={{ $now.format('yyyyMMddHHmmss') + Math.floor(Math.random()*900+100) }}",
+            "Phone Number": "={{ $('WhatsApp Trigger').first().json.messages[0].from }}",
+            "Food Item (s)": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Food_Item__s_', ``, 'string') }}",
+            "SubTotal": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('SubTotal', ``, 'string') }}",
+            "Tax amount": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Tax_amount', ``, 'string') }}",
+            "Total Price": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Total_Price', ``, 'string') }}",
+            "Order Date and Time": "={{$now}}",
+            "Additional Notes": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Additional_Notes', ``, 'string') }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Order ID",
+              "displayName": "Order ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Customer Name",
+              "displayName": "Customer Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Phone Number",
+              "displayName": "Phone Number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Food Item (s)",
+              "displayName": "Food Item (s)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Quantity Ordered",
+              "displayName": "Quantity Ordered",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "SubTotal",
+              "displayName": "SubTotal",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Tax amount",
+              "displayName": "Tax amount",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Total Price",
+              "displayName": "Total Price",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Order Date and Time",
+              "displayName": "Order Date and Time",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Additional Notes",
+              "displayName": "Additional Notes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "dfee3393-53a0-48ae-9ce0-587766d21312",
+      "name": "Post Orders",
+      "type": "n8n-nodes-base.googleSheetsTool",
+      "typeVersion": 4.7,
+      "position": [
+        688,
+        256
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "fnW2YrMABZ7clYvO",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "=1241251899072097",
+        "recipientPhoneNumber": "={{ $('WhatsApp Trigger').first().json.messages[0].from }}",
+        "textBody": "={{ $json.output }}",
+        "additionalFields": {}
+      },
+      "id": "81cdf45e-1910-4961-8a1e-881df3912560",
+      "name": "Send message",
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        848,
+        0
+      ],
+      "webhookId": "8017b313-621c-485a-ae3e-94e57df381d6",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "CpIRfDF36UDn2XCJ",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Update the Inventory",
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1jnVHmEYQeHMN_fjB4Joj3TaMt6jfozM1cykp40EtRp8",
+          "mode": "list",
+          "cachedResultName": "Food Delivery System",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1jnVHmEYQeHMN_fjB4Joj3TaMt6jfozM1cykp40EtRp8/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 542327767,
+          "mode": "list",
+          "cachedResultName": "Inventory",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1jnVHmEYQeHMN_fjB4Joj3TaMt6jfozM1cykp40EtRp8/edit#gid=542327767"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Status": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Status', ``, 'string') }}",
+            "Quantity": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Quantity__using_to_match_', ``, 'string') }}",
+            "Food Item": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Food_Item__using_to_match_', ``, 'string') }}"
+          },
+          "matchingColumns": [
+            "Food Item"
+          ],
+          "schema": [
+            {
+              "id": "Food Item",
+              "displayName": "Food Item",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Quantity",
+              "displayName": "Quantity",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Price",
+              "displayName": "Price",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheetsTool",
+      "typeVersion": 4.7,
+      "position": [
+        848,
+        256
+      ],
+      "id": "008519b2-a48a-4ccd-838f-2ceffe54e6f2",
+      "name": "Update Inventory",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "fnW2YrMABZ7clYvO",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "namanshah03012000@gmail.com",
+        "toEmail": "namanbshah0301@gmail.com",
+        "subject": "={{ 'New Order from ' + $fromAI('Customer_Name', ``, 'string') + ' — Order #' + $fromAI('Order_ID', ``, 'string') }}",
+        "emailFormat": "text",
+        "text": "={{ $fromAI('Order_Summary', 'Plain-text summary of the confirmed order: items with quantities, subtotal, tax, total, and pickup time', 'string') }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSendTool",
+      "typeVersion": 2.1,
+      "position": [
+        1024,
+        256
+      ],
+      "id": "3cc30421-290b-49bd-8012-93f2e8b31e53",
+      "name": "Send Email to the restaurant",
+      "webhookId": "0d52c45c-a19f-400f-9217-71c8074b3e0d",
+      "credentials": {
+        "smtp": {
+          "id": "L9LFY6n5KwyWCPb8",
+          "name": "SMTP account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "WhatsApp Trigger": {
+      "main": [
+        [
+          {
+            "node": "Only Text Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Only Text Messages": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Send message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Inventory": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get FAQ": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post Orders": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send message": {
+      "main": [
+        []
+      ]
+    },
+    "Update Inventory": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email to the restaurant": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "nodeGroups": [
+    {
+      "id": "c7ae68c1-9685-40d7-a223-20900f51daac",
+      "name": "Answer food orders",
+      "nodeIds": [
+        "c7802d58-ab2f-4bac-a76b-dc9aa94dcb91",
+        "fa43b9c8-453b-47be-be2f-ec6b73ff75a0",
+        "eb1b6e72-6804-4832-ba73-bc901565cf72",
+        "f3f30a9c-1eb2-4e67-acd2-bc1fb5f1744b",
+        "893fbcb7-2b12-4e8b-a179-ca07ffd29db6",
+        "a9ef299b-924e-414b-8200-f8c073894fbb",
+        "dfee3393-53a0-48ae-9ce0-587766d21312",
+        "008519b2-a48a-4ccd-838f-2ceffe54e6f2",
+        "3cc30421-290b-49bd-8012-93f2e8b31e53"
+      ],
+      "description": "Filters real customer texts, runs the ordering assistant with menu, FAQ and order-log lookups, then returns its reply to the sender."
+    }
+  ],
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "3b655e9deb96b552255d43b7830844b505bd623575323143eed19a8bc47d59dc"
+  }
+}
